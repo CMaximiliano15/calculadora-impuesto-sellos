@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calculadora de Impuesto al Sello</title>
+    <style>
+        /* Estilos básicos para replicar el diseño de la imagen */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 40px; background-color: #f7f7f7; }
+        .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 4px rgba(0,0,0,0.1); }
+        h1 { color: #007bff; text-align: center; margin-bottom: 30px; font-weight: 500; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+        select, input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 16px;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-color: white;
+            background-image: url('data:image/svg+xml;utf8,<svg fill="black" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px;
+        }
+        input[type="text"] { background-image: none; }
+        .button-group { display: flex; gap: 15px; margin-top: 30px; }
+        .button-group button {
+            flex-grow: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #consultarAlicuota, #calcularImpuesto { background-color: #007bff; color: white; }
+        #consultarAlicuota:hover, #calcularImpuesto:hover { background-color: #0056b3; }
+        
+        /* Estilo para la caja de resultados */
+        .resultado-box {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin-top: 30px;
+            background-color: #f9f9f9;
+            border-radius: 6px;
+        }
+        .resultado-box p { margin: 5px 0; font-size: 15px; line-height: 1.6; }
+        .resultado-box strong { font-weight: 700; }
+        .resultado-box .final-result { font-size: 1.4em; font-weight: 700; color: #333; margin-top: 15px; border-top: 1px dashed #ddd; padding-top: 10px; }
+        .resultado-box .final-result span { color: #007bff; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Calculadora de Impuesto al Sello</h1>
+
+        <div class="form-group">
+            <label for="provincia">Provincia</label>
+            <select id="provincia" onchange="updateFilters('provincia')">
+                <option value="">Cargando...</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="anio">Año</label>
+            <select id="anio" onchange="updateFilters('anio')" disabled>
+                <option value="">Seleccione Año</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="actividad">Actividad</label>
+            <select id="actividad" onchange="updateFilters('actividad')" disabled>
+                <option value="">Seleccione Actividad</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="sub_actividad">Sub Actividad</label>
+            <select id="sub_actividad" onchange="updateFilters('sub_actividad')" disabled>
+                <option value="">Seleccione Sub Actividad</option>
+            </select>
+        </div>
+
+            <div class="form-group">
+                <label for="subsubactividad">Sub-Sub Actividad</label>
+                <select id="subsubactividad" onchange="updateFilters('subsubactividad')" disabled>
+                    <option value="">Seleccione una Sub-Sub Actividad</option>
+                </select>
+            </div>
+
+            <div id="calculo-final">
+                <div class="form-group">
+                    <label for="valuacion_fiscal">Base Imponible (Valuación fiscal)</label>
+                    <input type="text" id="valuacion_fiscal" placeholder="Ej. 1000000">
+                </div>
+            </div>
+
+        <div class="button-group">
+            <button id="consultarAlicuota" onclick="checkFiltersAndConsult('alicuota')">Consultar alícuota</button>
+            <button id="calcularImpuesto" type="button" onclick="event.preventDefault(); calculateResult()" disabled> Calcular Impuesto</button>
+        </div>
+        
+        <div id="resultado-container" class="resultado-box hidden">
+            </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://127.0.0.1:5000/api';
+
+        filterMap = {
+            'provincia': { next: 'anio', name: 'provincia' },
+            'anio': { next: 'actividad', name: 'year' },
+            'actividad': { next: 'sub_actividad', name: 'actividad' },
+            'sub_actividad': { next: 'subsubactividad', name: 'subactividad' },
+            'subsubactividad': { next: null, name: 'subsubactividad' }
+        };
+
+
+        
+        let filters = {
+            provincia: null,
+            year: null,
+            actividad: null,
+            subactividad: null,
+            subsubactividad: null
+        };
+
+        
+        // --- Funciones de Comunicación y Lógica ---
+
+        async function fetchOptions(filterName, currentFilters) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/options`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filter_name: filterName, filters: currentFilters })
+                });
+                if (!response.ok) throw new Error('Error en la respuesta de la API');
+                const data = await response.json();
+                return data.options;
+            } catch (error) {
+                console.error("Error al obtener opciones:", error);
+                return [];
+            }
+        }
+
+async function fetchAlicuota(finalFilters) {
+    try {
+        console.log("Paso 1: Llamando a la API con:", finalFilters);
+        const response = await fetch(`${API_BASE_URL}/alicuota`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(finalFilters)
+        });
+        
+        const data = await response.json();
+        console.log("Paso 2: Datos crudos recibidos de Python:", data);
+        
+        // Retornamos el objeto, priorizando la estructura que espera el front
+        return data.result ? data.result : data;
+    } catch (error) {
+        console.error("Paso 2 ERROR: No se pudo conectar con Python", error);
+        return { status: "error", message: "Error de conexión con el servidor" };
+    }
+}
+
+        function populateSelect(selectId, options) {
+            const select = document.getElementById(selectId);
+            
+            const getFriendlyName = (id) => {
+                let name = id.replace('_', ' ');
+                if (name === 'anio') {
+                    name = 'Año';
+                } else if (name === 'sub_actividad') {
+                    name = 'Sub Actividad';
+                }
+                return name.charAt(0).toUpperCase() + name.slice(1);
+            };
+
+            const selectName = getFriendlyName(selectId);
+            
+            // Placeholder
+            select.innerHTML = `<option value="">Seleccione ${selectName}</option>`;
+            
+            // Filtrar valores vacíos o nulos
+            options = options.filter(opt => opt !== null && opt !== "");
+
+           
+            // Esto asegura que si solo queda el placeholder, el select se bloquea.
+            select.disabled = options.length === 0;
+
+            options.forEach(option => {
+                const opt = document.createElement('option');
+                opt.value = opt.textContent = option;
+                select.appendChild(opt);
+            });
+        }
+
+        
+function getActiveFilters() {
+    const activeFilters = {};
+    ['provincia', 'year', 'actividad', 'subactividad', 'subsubactividad'].forEach(key => {
+        if (!filters[key]) return;
+
+        if ((key === 'subactividad' || key === 'subsubactividad') &&
+            filters['actividad'] &&
+            filters['actividad'].toUpperCase().includes('CASO GENERAL')) {
+            return;
+        }
+
+        if (key === 'subsubactividad') {
+            activeFilters['subsubactividad'] = filters[key];
+        } else {
+            activeFilters[key] = filters[key];
+        }
+    });
+    return activeFilters;  
+}
+
+
+function checkAllFiltersSelected() {
+    const f = getActiveFilters();
+    
+    // IDs exactos del HTML
+    const actSelect = document.getElementById("actividad");
+    const subActSelect = document.getElementById("sub_actividad"); // Con guion bajo
+    const subSubSelect = document.getElementById("subsubactividad");
+
+    // 1. Provincia y Año siempre obligatorios
+    if (!f.provincia || !f.year) return false;
+    
+    // 2. Validación Dinámica: Solo exigimos si el campo está habilitado
+    if (actSelect && !actSelect.disabled && !f.actividad) return false;
+
+    // 3. Caso General: Si se eligió, habilitamos el botón inmediatamente
+    const isGeneral = f.actividad && f.actividad.toUpperCase().includes("CASO GENERAL");
+    if (isGeneral) return true; 
+
+    // 4. Sub Actividad (Solo si no está disabled)
+    if (subActSelect && !subActSelect.disabled && !f.subactividad) return false;
+
+    // 5. Sub-Sub Actividad (Solo si no está disabled)
+    if (subSubSelect && !subSubSelect.disabled && !f.subsubactividad) return false;
+    
+    return true; 
+}
+async function updateFilters(changedFilterId) {
+    const selectElement = document.getElementById(changedFilterId);
+    const filterName = filterMap[changedFilterId].name;
+    let nextFilterId = filterMap[changedFilterId].next;
+
+    // 1. Limpiar resultados y deshabilitar cálculo
+    document.getElementById('resultado-container').classList.add('hidden');
+    document.getElementById('calcularImpuesto').disabled = true;
+
+    // 2. Actualizar el valor y limpiar filtros posteriores
+    filters[filterName] = selectElement.value || null;
+    let current = changedFilterId;
+    while (filterMap[current] && filterMap[current].next) {
+        const nextId = filterMap[current].next;
+        const nextElement = document.getElementById(nextId);
+        if (nextElement) {
+            // Limpieza básica
+            nextElement.value = "";
+            
+            // Aseguramos que los filtros posteriores al cambio estén deshabilitados
+            nextElement.disabled = true; 
+            
+            filters[filterMap[nextId].name] = null;
+            current = nextId;
+        } else {
+            current = null;
+        }
+    }
+    
+    // 3. Lógica de Caso General (se mantiene)
+    const subActividadSelect = document.getElementById('sub_actividad');
+    const activityValue = filters.actividad;
+
+    const shouldBypassSubactividad = activityValue && (
+        activityValue.includes('N/A - Caso General') ||
+        activityValue.includes('Caso General')
+    );
+
+    if (filterName === 'actividad') {
+        if (shouldBypassSubactividad) {
+            subActividadSelect.innerHTML = "<option value=''>No aplica (Caso General)</option>";
+            subActividadSelect.disabled = true;
+            subActividadSelect.value = "";
+            filters.subactividad = null;
+        } else {
+            // Si la actividad cambia de un valor que era "Caso General" a un valor normal, 
+            // aseguramos que sub_actividad esté habilitada antes del bucle de salto.
+            subActividadSelect.disabled = false;
+        }
+    } else {
+        const stillGeneral = filters.actividad && filters.actividad.toUpperCase().includes("CASO GENERAL");
+        if (stillGeneral) {
+            subActividadSelect.innerHTML = "<option value=''>No aplica (Caso General)</option>";
+            subActividadSelect.disabled = true;
+            subActividadSelect.value = "";
+            filters.subactividad = null;
+        }
+    }
+    
+    // 4. Cargar el siguiente filtro y gestionar el salto
+    if (filters[filterName] && nextFilterId) {
+        
+        const nextFilterName = filterMap[nextFilterId].name;
+
+        // Lógica de "Caso General" que genera un salto manual (OK)
+        const isGeneral = filters.actividad &&
+            filters.actividad.toUpperCase().includes("CASO GENERAL");
+
+        if (isGeneral && (nextFilterId === 'sub_actividad' || nextFilterId === 'subsubactividad')) {
+            document.getElementById(nextFilterId).innerHTML =
+                "<option value=''>No aplica (Caso General)</option>";
+            document.getElementById(nextFilterId).value = "";
+            document.getElementById(nextFilterId).disabled = true;
+            filters[nextFilterName] = null;
+            return;
+        }
+
+        // === Bloque Crítico: Lógica de Bloqueo/Salteo por opciones vacías ===
+        let currentFilterIdToProcess = nextFilterId;
+        let options = [];
+        let didSkipFilter = false;
+
+        // Bucle para manejar saltos si el filtro no tiene opciones
+        while (currentFilterIdToProcess) {
+            const currentFilterName = filterMap[currentFilterIdToProcess].name;
+            const activeFilters = getActiveFilters();
+            
+            const currentSelect = document.getElementById(currentFilterIdToProcess);
+
+            // Evitamos llamar a la API si el filtro ya fue deshabilitado por el Caso General
+            if (currentSelect.disabled && filters[filterMap[currentFilterIdToProcess].name] === null && isGeneral) {
+                 currentFilterIdToProcess = filterMap[currentFilterIdToProcess].next;
+                 didSkipFilter = true;
+                 continue;
+            }
+
+            // 4.1 Llamar a la API
+            options = await fetchOptions(currentFilterName, activeFilters);
+            
+            if (options && options.length === 0) {
+                // Caso: Bloqueo (Actividad que solo tiene el punto)
+                
+                currentSelect.innerHTML = "<option value=''>N/A - Implícito</option>";
+                currentSelect.disabled = true; // Deshabilitar el dropdown del filtro bloqueado
+                currentSelect.value = "";
+                filters[currentFilterName] = null;
+                
+                didSkipFilter = true;
+                currentFilterIdToProcess = filterMap[currentFilterIdToProcess].next;
+                
+            } else {
+                // 4.2 Si hay opciones válidas, las poblamos y salimos del bucle while
+                populateSelect(currentFilterIdToProcess, options);
+                
+
+                // Si llegamos aquí, encontramos opciones y debemos habilitar el selector
+                currentSelect.disabled = false; 
+
+                // Si se saltó un filtro (Ej: Actividad) y llegamos a uno válido (Ej: SubActividad), 
+                // debemos habilitar el botón de consulta si todo lo anterior es válido.
+                if (didSkipFilter && checkAllFiltersSelected()) {
+                    document.getElementById('consultarAlicuota').disabled = false;
+                }
+                
+                currentFilterIdToProcess = null; // Sale del bucle
+            }
+        }
+        // === Fin Bloque Crítico ===
+    } 
+
+    // 5. Habilitar el botón de consulta si todos los filtros obligatorios (visibles y no saltados) están seleccionados.
+    const consultarBtn = document.getElementById('consultarAlicuota');
+    if (checkAllFiltersSelected()) {
+        consultarBtn.disabled = false;
+    } else {
+        consultarBtn.disabled = true; 
+    }
+}
+        // index.html 
+
+
+async function checkFiltersAndConsult(action) {
+    // 1. Obtener filtros actuales
+    const currentFilters = getActiveFilters();
+    console.log("Filtros detectados antes de validar:", currentFilters);
+
+    // 2. LÓGICA DE CASO GENERAL (Normalizamos a Mayúsculas para evitar errores)
+    const activityValue = currentFilters.actividad || "";
+    const isGeneralCase = activityValue.toUpperCase().includes('CASO GENERAL') || 
+                         activityValue.toUpperCase().includes('N/A');
+
+    if (isGeneralCase) {
+        currentFilters.subactividad = null;
+        currentFilters.subsubactividad = null;
+    }
+
+    // 3. VALIDACIÓN MÍNIMA (Provincia y Año)
+    // Nota: Verifica si tu ID es 'anio' o 'year'. En tu HTML es 'anio'.
+    if (!currentFilters.provincia || !currentFilters.year) {
+        alert("Por favor seleccione Provincia y Año.");
+        return;
+    }
+
+    // 4. VALIDACIÓN DE CAMPOS HABILITADOS (Dinámica)
+    const campos = [
+        { id: 'actividad', nombre: 'Actividad' },
+        { id: 'sub_actividad', nombre: 'Sub Actividad' },
+        { id: 'subsubactividad', nombre: 'Sub-Sub Actividad' }
+    ];
+
+    for (let campo of campos) {
+        const el = document.getElementById(campo.id);
+        
+        // Solo validamos si el elemento existe en el HTML y NO está deshabilitado
+        if (el && !el.disabled) {
+            if (!el.value || el.value.trim() === "") {
+                alert(`Por favor seleccione ${campo.nombre}.`);
+                return; // Frenamos aquí
+            }
+        }
+    }
+
+    // 5. DISPARAR CONSULTA
+    console.log("¡Todo OK! Enviando consulta final al servidor...");
+    await consultAlicuota(action);
+}
+async function consultAlicuota(action = 'alicuota') {
+    const resultBox = document.getElementById('resultado-container');
+    const currentFilters = getActiveFilters();
+    
+    resultBox.innerHTML = "<p>Cargando datos...</p>";
+    resultBox.classList.remove('hidden');
+
+    const result = await fetchAlicuota(currentFilters);
+    console.log("Resultado procesado en consultAlicuota:", result);
+
+    if (!result || !result.status) {
+        resultBox.innerHTML = "<p style='color:red;'>Error: La respuesta del servidor no tiene el formato correcto.</p>";
+        return;
+    }
+
+    if (result.status === "error") {
+        resultBox.innerHTML = `<p><strong>Error:</strong> ${result.message}</p>`;
+        return;
+    }
+
+    const getSafeText = (id) => {
+        const el = document.getElementById(id);
+        if (!el || el.disabled || el.selectedIndex === -1) return "N/A";
+        return el.options[el.selectedIndex].text;
+    };
+
+    try {
+        // --- CASO 1: ALÍCUOTA ÚNICA (PUEDE TENER CARGO FIJO Y LÍMITES) ---
+        if (result.status === "ok") {
+            const factor = result.alicuota_fact || result.alicuota_unica || 0;
+            const porcentaje = (factor * 100).toFixed(2);
+            const cargoFijo = result.cargo_fijo_adicional || 0;
+            const mMin = result.monto_min || 0;
+            const mMax = result.monto_max || "";
+
+            // Guardamos los valores en atributos para que calculateResult pueda usarlos
+            resultBox.setAttribute('data-alicuota', factor);
+            resultBox.setAttribute('data-cargo-fijo', cargoFijo);
+            resultBox.setAttribute('data-monto-min', mMin);
+            resultBox.setAttribute('data-monto-max', mMax);
+            
+            let limitesHtml = "";
+            if (mMin > 0) limitesHtml += `<p><strong>Impuesto mínimo:</strong> $${mMin.toLocaleString('es-AR')}</p>`;
+            if (mMax > 0 && mMax !== "") limitesHtml += `<p><strong>Impuesto máximo:</strong> $${mMax.toLocaleString('es-AR')}</p>`;
+
+            let textoCargo = cargoFijo > 0 ? `<p style='color:orange;'><strong>+ Cargo fijo:</strong> $${cargoFijo.toLocaleString('es-AR')}</p>` : "";
+            
+            resultBox.innerHTML = `
+                <p><strong>Provincia:</strong> ${getSafeText('provincia')}</p>
+                <p><strong>Año:</strong> ${getSafeText('anio')}</p>
+                <div style="margin-top:10px; border-top:1px solid #ddd; padding-top:10px;">
+                    <p><strong>Alícuota nominal:</strong> ${porcentaje}%</p>
+                    ${limitesHtml}
+                    ${textoCargo}
+                </div>
+                <p id="bi-pendiente"><strong>Base Imponible:</strong> (Pendiente de cálculo para determinar alícuota efectiva)</p>
+            `;
+            
+            if (action === 'impuesto') calculateResult();
+
+        // --- CASO 2: MONTO FIJO PURO ---
+        } else if (result.status === "fixed") {
+            const montoFinal = result.monto_fijo || 0;
+            const formattedMonto = montoFinal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            
+            resultBox.innerHTML = `
+                <p><strong>Provincia:</strong> ${getSafeText('provincia')}</p>
+                <p><strong>Año:</strong> ${getSafeText('anio')}</p>
+                <p><strong>Actividad:</strong> ${getSafeText('actividad')}</p>
+                <div style="margin-top:10px; border-top:1px solid #ddd; padding-top:10px; background-color: #e7f3ff; padding: 10px; border-radius: 4px;">
+                    <p><strong>Régimen:</strong> Monto Fijo</p>
+                    <p><strong>Detalle:</strong> ${result.detalle}</p>
+                    <p style="font-size: 1.2em; margin-top: 5px;"><strong>Total a Pagar:</strong> <span style="color:#28a745; font-weight:bold;">$ ${formattedMonto}</span></p>
+                </div>
+            `;
+            
+            resultBox.setAttribute('data-alicuota', 0);
+            document.getElementById('calcularImpuesto').disabled = true;
+            return; 
+
+        // --- CASO 3: UMBRALES (ESCALAS) ---
+        } else if (result.status === "varies") {
+            resultBox.setAttribute('data-umbrales', JSON.stringify(result.umbrales));
+            resultBox.setAttribute('data-alicuota', 'VARIES_BY_AMOUNT');
+
+            let html = `<p><strong>La tasa varía según el monto:</strong></p><ul>`;
+            (result.umbrales || []).forEach(u => {
+                let detalle = `${u.alicuota_pct}%`;
+                if (u.cargo_fijo_tramo > 0) detalle += ` + $${u.cargo_fijo_tramo.toLocaleString('es-AR')}`;
+                
+                // Mostrar límites por tramo si existen
+                let limitesTramo = "";
+                if (u.monto_min > 0) limitesTramo += ` (Mín. $${u.monto_min.toLocaleString('es-AR')})`;
+                
+                html += `<li>Monto > $${(u.desde || 0).toLocaleString('es-AR')}: <strong>${detalle}${limitesTramo}</strong></li>`;
+            });
+            html += `</ul>`;
+            
+            html += `<p id="bi-pendiente"><strong>Base Imponible:</strong> (Pendiente de cálculo)</p>`;
+            html += `<div class="final-result">Impuesto total: $ <span>0,00</span></div>`;
+            
+            resultBox.innerHTML = html;
+            document.getElementById('calcularImpuesto').disabled = false;
+        }
+    } catch (err) {
+        console.error("Error al renderizar HTML:", err);
+        resultBox.innerHTML = `<p style='color:orange;'>Error al procesar los datos recibidos.</p>`;
+    }
+
+    document.getElementById('calcularImpuesto').disabled = false;
+}
+
+async function calculateResult() {
+    // 0. Evitar recarga de página
+    if (window.event) window.event.preventDefault();
+
+    const resultBox = document.getElementById('resultado-container');
+    const alicuotaMarker = resultBox.getAttribute('data-alicuota');
+    const valuacionFiscalInput = document.getElementById('valuacion_fiscal');
+    const valuacionFiscal = parseFloat(valuacionFiscalInput.value.replace(/\./g, '').replace(',', '.'));
+
+    // 1. Validación
+    if (isNaN(valuacionFiscal) || valuacionFiscal <= 0) {
+        alert("Ingrese una Base Imponible válida.");
+        return;
+    }
+
+    let alicuotaFactor = 0;
+    let cargoFijo = 0;
+    let mMin = 0;
+    let mMax = Infinity;
+
+    // 2. Lógica de búsqueda por tramos o fija e identificación de límites
+    if (alicuotaMarker === 'VARIES_BY_AMOUNT') {
+        const umbrales = JSON.parse(resultBox.getAttribute('data-umbrales') || "[]");
+        const tramoEncontrado = umbrales
+            .filter(u => valuacionFiscal >= (u.desde || 0))
+            .sort((a, b) => b.desde - a.desde)[0];
+
+        if (tramoEncontrado) {
+            alicuotaFactor = tramoEncontrado.alicuota_fact;
+            cargoFijo = tramoEncontrado.cargo_fijo_tramo; 
+            mMin = tramoEncontrado.monto_min || 0;
+            mMax = (tramoEncontrado.monto_max && tramoEncontrado.monto_max !== 0) ? tramoEncontrado.monto_max : Infinity;
+        }
+    } else {
+        alicuotaFactor = parseFloat(alicuotaMarker) || 0;
+        cargoFijo = parseFloat(resultBox.getAttribute('data-cargo-fijo')) || 0;
+        // Obtenemos los límites que guardamos en consultAlicuota
+        mMin = parseFloat(resultBox.getAttribute('data-monto-min')) || 0;
+        let valMax = resultBox.getAttribute('data-monto-max');
+        mMax = (valMax && valMax !== "") ? parseFloat(valMax) : Infinity;
+    }
+
+    // 3. Cálculo base e Impuesto Final (Aplicando límites)
+    const impuestoCalculado = (alicuotaFactor * valuacionFiscal) + cargoFijo;
+    
+    // Aquí aplicamos el PISO (Math.max) y el TECHO (Math.min)
+    let impuestoFinal = Math.max(mMin, Math.min(mMax, impuestoCalculado));
+    
+    // --- NUEVO: Cálculo de Alícuota Efectiva ---
+    const alicuotaEfectiva = (impuestoFinal / valuacionFiscal) * 100;
+    
+    // 4. Formateo 
+    const alicuotaDisplay = (alicuotaFactor * 100).toFixed(2);
+    const alicuotaEfectivaDisplay = alicuotaEfectiva.toFixed(2); // <--- CAMBIO AQUÍ
+    const formattedTotal = impuestoFinal.toLocaleString('es-AR', { minimumFractionDigits: 2 });
+    const formattedValuacion = valuacionFiscal.toLocaleString('es-AR');
+
+    // --- 5. RENDERIZADO LIMPIO ---
+    const anterior = document.getElementById('bloque-resultado-final');
+    if (anterior) anterior.remove();
+
+    const parrafos = resultBox.querySelectorAll('p');
+    parrafos.forEach(p => {
+        if (p.innerHTML.includes("Base Imponible") || p.innerHTML.includes("Pendiente") || p.innerHTML.includes("Impuesto total")) {
+            p.remove();
+        }
+    });
+
+    const divsViejos = resultBox.querySelectorAll('.final-result');
+    divsViejos.forEach(d => d.remove());
+
+    const contenedorFinal = document.createElement('div');
+    contenedorFinal.id = 'bloque-resultado-final';
+    
+    let htmlComposicion = "";
+    if (cargoFijo > 0 || alicuotaFactor > 0) {
+        // Mostramos una nota si se aplicó un límite para que el usuario entienda el número
+        let notaLimites = "";
+        if (impuestoFinal === mMin && impuestoCalculado < mMin) {
+            notaLimites = `<br><span style="color:red; font-weight:bold;">(Se aplicó el Impuesto Mínimo vigente)</span>`;
+        } else if (impuestoFinal === mMax && impuestoCalculado > mMax) {
+            notaLimites = `<br><span style="color:red; font-weight:bold;">(Se aplicó el Impuesto Máximo vigente)</span>`;
+        }
+
+        htmlComposicion = `
+            <div style="color: #155724; background-color: #d4edda; padding: 12px; border-radius: 4px; border: 1px solid #c3e6cb; font-size: 0.9em; margin-top: 15px; margin-bottom: 15px;">
+                <p style="margin:0;"><strong>Alícuota Nominal:</strong> ${alicuotaDisplay}%</p>
+                <p style="margin:5px 0 0 0;"><strong>Alícuota Efectiva:</strong> ${alicuotaEfectivaDisplay}%</p>
+                ${notaLimites}
+            </div>`;
+    }
+
+    contenedorFinal.innerHTML = `
+        <hr style="border: 0; border-top: 1px dashed #ccc; margin: 15px 0;">
+        ${htmlComposicion}
+        <p><strong>Base Imponible procesada:</strong> $ ${formattedValuacion}</p>
+        <div class="final-result" style="border-top: 2px solid #007bff; margin-top: 10px; padding-top: 10px;">
+            Impuesto total determinado: $ <span>${formattedTotal}</span>
+        </div>
+    `;
+
+    resultBox.appendChild(contenedorFinal);
+}
+        async function initialize() {
+            const opcionesProvincia = await fetchOptions('provincia', {});
+            populateSelect('provincia', opcionesProvincia);
+        }
+
+        document.addEventListener('DOMContentLoaded', initialize);
+    </script>
+</body>
+</html>
